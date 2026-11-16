@@ -10,6 +10,11 @@ requires-python = ">=3.12"
 
 [project.optional-dependencies]
 dev = ["pytest"]
+gui = ["tkinter"]
+
+[project.scripts]
+schedcheck = "schedcheck.cli:main"
+schedcheck-viewer = "schedcheck.viewer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

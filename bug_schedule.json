@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "seed": 1,
+  "choices": [
+    0,
+    0,
+    1
+  ],
+  "tasks": [
+    "Withdrawal-1",
+    "Withdrawal-2",
+    "Withdrawal-2"
+  ],
+  "failure": "Invariant check returned False"
+}

@@ -10,14 +10,19 @@ Task A checks balance ($100 >= $80) -> passes.
 Before Task A deducts the amount, it yields (e.g. simulated network I/O or sleep(0)).
 Task B runs, checks balance ($100 >= $80) -> passes.
 Both tasks deduct $80, resulting in a balance of -$60 (invariant broken!).
+
+This example shows the four stages of schedcheck:
+1. EXPLORE         — automatically search for race conditions across many random seeds.
+2. EXPLORE SYSTEMATIC — exhaustively explore all scheduling choices (bounded).
+3. REPORT          — see a human-readable timeline of what happened.
+4. REPLAY          — reproduce the exact same bug deterministically.
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
-from schedcheck import RandomEventLoop, replay, run
+from schedcheck import explore, explore_systematic, replay, timeline
 
 
 class BankAccount:
@@ -36,56 +41,95 @@ class BankAccount:
         return False
 
 
-async def transfer_scenario(account: BankAccount) -> tuple[bool, bool]:
-    """Run two concurrent $80 withdrawals against the account."""
-    t1 = asyncio.create_task(account.withdraw(80), name="Withdrawal-1")
-    t2 = asyncio.create_task(account.withdraw(80), name="Withdrawal-2")
-    r1 = await t1
-    r2 = await t2
-    return r1, r2
+def make_scenario():
+    """Create a fresh scenario coroutine (needed because coroutines are single-use)."""
+    account = BankAccount(100)
+
+    async def scenario() -> BankAccount:
+        t1 = asyncio.create_task(account.withdraw(80), name="Withdrawal-1")
+        t2 = asyncio.create_task(account.withdraw(80), name="Withdrawal-2")
+        await t1
+        await t2
+        return account
+
+    return scenario()
 
 
 def main() -> None:
-    # 1. Run with Random exploration until the race condition is discovered
-    print("Searching for race condition with RandomEventLoop...")
-    bug_found = False
-    failing_schedule = None
+    # ── Stage 1: EXPLORE (Random) ──────────────────────────────────────────
+    print("=" * 60)
+    print("Stage 1: Exploring for race conditions (random seeds)...")
+    print("=" * 60)
 
-    for seed in range(50):
-        account = BankAccount(100)
-        (r1, r2), schedule = run(transfer_scenario(account), seed=seed)
+    bugs = explore(
+        make_scenario,
+        check=lambda acc: acc.balance >= 0,
+        seeds=range(50),
+        max_bugs=1,
+    )
 
-        if account.balance < 0:
-            print(f"-> Race condition found with seed {seed}!")
-            print(f"   Final balance: ${account.balance} (Withdrawals: {r1}, {r2})")
-            print(f"   Schedule choices: {schedule.choices}")
-            print(f"   Schedule tasks:   {schedule.tasks}")
-            failing_schedule = schedule
-            bug_found = True
-            break
-
-    if not bug_found or failing_schedule is None:
-        print("No race condition triggered in initial seed search.")
+    if not bugs:
+        print("No race condition found. All 50 seeds passed.")
         return
 
-    # 2. Save the reproducing schedule to disk
-    schedule_file = Path("bug_schedule.json")
-    failing_schedule.save(schedule_file)
-    print(f"\nSaved failing schedule to {schedule_file.name}")
+    bug = bugs[0]
+    print(f"Bug found with seed {bug.seed}!")
+    print(f"Error: {bug.error}")
 
-    # 3. Exact replay: Reproduce the exact bug on demand
-    print("\nReplaying the saved schedule...")
+    # ── Stage 2: EXPLORE SYSTEMATIC ────────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("Stage 2: Systematic exploration (exhaustive, bounded)...")
+    print("=" * 60)
+
+    sys_bugs, stats = explore_systematic(
+        make_scenario,
+        check=lambda acc: acc.balance >= 0,
+        max_schedules=50,
+        max_bugs=5,
+    )
+
+    print(f"Explored {stats.total_schedules_explored} schedules")
+    print(f"Found {len(sys_bugs)} unique bug schedules")
+    print(f"Max depth reached: {stats.max_depth_reached}")
+    if stats.terminated_early:
+        print("Search terminated early (bound reached)")
+
+    # Show the different bug schedules found
+    for i, sys_bug in enumerate(sys_bugs[:3]):
+        print(f"  Bug {i+1}: choices={sys_bug.schedule.choices}, tasks={sys_bug.schedule.tasks}")
+
+    # Use the first bug for report/replay
+    bug = bugs[0]
+
+    # ── Stage 3: REPORT ────────────────────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("Stage 3: Timeline report of the failing execution")
+    print("=" * 60)
+    print()
+    print(timeline(bug.schedule))
+
+    # ── Stage 4: REPLAY ────────────────────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("Stage 4: Replaying the exact bug...")
+    print("=" * 60)
+
     replay_account = BankAccount(100)
-    (rep_r1, rep_r2), rep_schedule = replay(transfer_scenario(replay_account), failing_schedule)
 
-    print(f"-> Replay finished!")
-    print(f"   Final balance: ${replay_account.balance} (Withdrawals: {rep_r1}, {rep_r2})")
+    async def replay_scenario() -> BankAccount:
+        t1 = asyncio.create_task(replay_account.withdraw(80), name="Withdrawal-1")
+        t2 = asyncio.create_task(replay_account.withdraw(80), name="Withdrawal-2")
+        await t1
+        await t2
+        return replay_account
+
+    _, replay_schedule = replay(replay_scenario(), bug.schedule)
+
+    print(f"Replay finished! Final balance: ${replay_account.balance}")
     assert replay_account.balance == -60, "Bug did not reproduce on replay!"
-    print("   Bug successfully and deterministically reproduced!")
-
-    # Clean up demo file
-    if schedule_file.exists():
-        schedule_file.unlink()
+    print("Bug successfully and deterministically reproduced!")
 
 
 if __name__ == "__main__":

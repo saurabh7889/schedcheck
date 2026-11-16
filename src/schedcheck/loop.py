@@ -41,11 +41,25 @@ import asyncio
 import asyncio.tasks
 import heapq
 import math
+import random
 from typing import Any, Coroutine, TypeVar
 
 from schedcheck.schedule import Schedule
 
 T = TypeVar("T")
+
+
+# ==============================================================================
+# Exceptions
+# ==============================================================================
+
+class DeadlockError(Exception):
+    """Raised when the loop detects that no task can make progress.
+
+    This happens when there are pending (not-done) tasks, but nothing is in
+    the ready queue and no timers are scheduled — meaning no task can ever
+    be woken up, and the program would hang forever.
+    """
 
 
 # ==============================================================================
@@ -86,6 +100,16 @@ def _py_task_factory(
             kwargs["name"] = f"Task-{loop._task_counter}"
             loop._task_counter += 1
     return asyncio.tasks._PyTask(coro, loop=loop, **kwargs)
+
+
+def _get_pending_tasks(loop: asyncio.AbstractEventLoop) -> set[asyncio.Task]:
+    """Return all non-done tasks registered on this loop.
+
+    We use `_py_all_tasks` because our _PyTask instances register in the
+    pure-Python task registry, which the C-accelerated `asyncio.all_tasks()`
+    cannot see.
+    """
+    return asyncio.tasks._py_all_tasks(loop=loop)
 
 
 def _poll_io_and_timers(loop: asyncio.SelectorEventLoop) -> None:
@@ -185,7 +209,25 @@ class ControllableEventLoop(asyncio.SelectorEventLoop):
 
         Polls for I/O and ready timers, then executes at most one handle. If more
         than one task is ready, invokes `choose()` to decide which task runs next.
+
+        Raises DeadlockError if no task can make progress (nothing ready, nothing
+        scheduled, but pending tasks still exist).
         """
+        # --- Deadlock detection ---
+        # Check BEFORE calling _poll_io_and_timers, because if timeout would be
+        # None (no ready handles, no scheduled timers), select() would block
+        # forever. We detect this case and raise immediately instead.
+        if (not self._ready and not self._stopping and not self._scheduled
+                and not self._failed):
+            pending = _get_pending_tasks(self)
+            if pending:
+                task_names = sorted(t.get_name() for t in pending)
+                raise DeadlockError(
+                    f"Deadlock: {len(pending)} tasks are pending but nothing "
+                    f"is ready to run or scheduled. "
+                    f"Stuck tasks: {task_names}"
+                )
+
         _poll_io_and_timers(self)
 
         # Discard cancelled handles at the head of the ready queue
@@ -249,17 +291,50 @@ class ControllableEventLoop(asyncio.SelectorEventLoop):
                 )
 
 
+class RandomEventLoop(ControllableEventLoop):
+    """An event loop that makes pseudo-random scheduling choices at each choice point."""
+
+    def __init__(self, seed: int | None = None) -> None:
+        super().__init__()
+        self._seed = seed
+        self._rng = random.Random(seed)
+        self.schedule.seed = seed
+
+    def choose(self, ready_names: list[str]) -> int:
+        """Choose a random ready task using the seeded PRNG."""
+        return self._rng.randrange(len(ready_names))
+
+
 def run(
     coro: Coroutine[Any, Any, T],
-    loop_cls: type[ControllableEventLoop] = ControllableEventLoop,
+    loop_cls: type[ControllableEventLoop] | None = None,
+    *,
+    seed: int | None = None,
 ) -> tuple[T, Schedule]:
-    """Run a coroutine on our controllable loop and return (result, schedule)."""
+    """Run a coroutine on our controllable loop and return (result, schedule).
+
+    Args:
+        coro: The coroutine to run.
+        loop_cls: Optional event loop class. If None, defaults to RandomEventLoop
+            when seed is provided, otherwise ControllableEventLoop.
+        seed: Optional integer seed for pseudo-random choice generation.
+    """
+    effective_loop_cls: type[ControllableEventLoop]
+    if loop_cls is None:
+        effective_loop_cls = RandomEventLoop if seed is not None else ControllableEventLoop
+    else:
+        effective_loop_cls = loop_cls
+
     recorded_loop: ControllableEventLoop | None = None
 
     def loop_factory() -> ControllableEventLoop:
         nonlocal recorded_loop
-        recorded_loop = loop_cls()
-        return recorded_loop
+        if issubclass(effective_loop_cls, RandomEventLoop):
+            loop = effective_loop_cls(seed=seed)
+        else:
+            loop = effective_loop_cls()
+        recorded_loop = loop
+        return loop
 
     try:
         result = asyncio.run(coro, loop_factory=loop_factory)

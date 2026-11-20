@@ -13,6 +13,8 @@ import pytest
 from schedcheck import explore_test
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def test_cli_explore_random() -> None:
@@ -108,10 +110,11 @@ def test_cli_replay() -> None:
 
 def test_explore_test_decorator() -> None:
     """@explore_test decorator catches bugs."""
+    demo = _load_demo_module()
+
     @explore_test(seeds=range(20), check=lambda acc: acc.balance >= 0)
     async def test_withdraw_race():
-        from examples.demo_bugs import BankAccount
-        account = BankAccount(100)
+        account = demo.BankAccount(100)
         t1 = asyncio.create_task(account.withdraw(80), name="W1")
         t2 = asyncio.create_task(account.withdraw(80), name="W2")
         await t1
@@ -120,7 +123,7 @@ def test_explore_test_decorator() -> None:
 
     # Should raise AssertionError because bug is found
     with pytest.raises(AssertionError, match="Bug found"):
-        test_withdraw_race()
+        _ = test_withdraw_race()
 
 
 def test_explore_test_decorator_passes_on_correct() -> None:
@@ -131,11 +134,13 @@ def test_explore_test_decorator_passes_on_correct() -> None:
         return 42
 
     # Should not raise
-    test_correct()
+    _ = test_correct()
 
 
 def test_explore_test_decorator_systematic() -> None:
     """@explore_test decorator works with systematic mode."""
+    demo = _load_demo_module()
+
     @explore_test(
         check=lambda acc: acc.balance >= 0,
         systematic=True,
@@ -143,8 +148,7 @@ def test_explore_test_decorator_systematic() -> None:
         max_bugs=1,
     )
     async def test_withdraw_systematic():
-        from examples.demo_bugs import BankAccount
-        account = BankAccount(100)
+        account = demo.BankAccount(100)
         t1 = asyncio.create_task(account.withdraw(80), name="W1")
         t2 = asyncio.create_task(account.withdraw(80), name="W2")
         await t1
@@ -153,4 +157,4 @@ def test_explore_test_decorator_systematic() -> None:
 
     # Should raise AssertionError because bug is found
     with pytest.raises(AssertionError, match="Bug found"):
-        test_withdraw_systematic()
+        _ = test_withdraw_systematic()

@@ -23,7 +23,7 @@ def explore_test(
     systematic: bool = False,
     max_schedules: int | None = None,
     max_depth: int | None = None,
-) -> Callable[[F], F]:
+) -> Callable[[Callable[..., Any]], Callable[..., None]]:
     """
     Decorator to automatically explore an async test function for race conditions.
 

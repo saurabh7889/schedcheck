@@ -12,6 +12,8 @@ import pytest
 
 from schedcheck import explore_test
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def test_cli_explore_random() -> None:
     """CLI explore command finds race condition."""
@@ -21,7 +23,7 @@ def test_cli_explore_random() -> None:
         "--check", "check_balance_non_negative",
         "--seeds-start", "0", "--seeds-end", "50",
         "--max-bugs", "1"
-    ], capture_output=True, text=True, cwd="D:/SCHEDCHECK")
+    ], capture_output=True, text=True, cwd=str(REPO_ROOT))
 
     assert result.returncode == 1  # Bug found
     assert "Found 1 bug(s)" in result.stdout
@@ -36,7 +38,7 @@ def test_cli_explore_systematic() -> None:
         "--check", "check_balance_non_negative",
         "--max-schedules", "50",
         "--max-bugs", "3"
-    ], capture_output=True, text=True, cwd="D:/SCHEDCHECK")
+    ], capture_output=True, text=True, cwd=str(REPO_ROOT))
 
     assert result.returncode == 1  # Bugs found
     assert "Schedules explored:" in result.stdout
@@ -46,7 +48,7 @@ def test_cli_explore_systematic() -> None:
 def _load_demo_module():
     """Load the demo_bugs module."""
     spec = importlib.util.spec_from_file_location(
-        "demo_bugs", "D:/SCHEDCHECK/examples/demo_bugs.py"
+        "demo_bugs", str(REPO_ROOT / "examples" / "demo_bugs.py")
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -71,7 +73,7 @@ def test_cli_report() -> None:
     # Now test report
     result = subprocess.run([
         sys.executable, "-m", "schedcheck", "report", schedule_path
-    ], capture_output=True, text=True, cwd="D:/SCHEDCHECK")
+    ], capture_output=True, text=True, cwd=str(REPO_ROOT))
 
     assert result.returncode == 0
     assert "=== schedcheck Timeline ===" in result.stdout
@@ -97,8 +99,8 @@ def test_cli_replay() -> None:
     # Now test replay
     result = subprocess.run([
         sys.executable, "-m", "schedcheck", "replay",
-        "D:/SCHEDCHECK/examples/demo_bugs.py", "make_withdraw_scenario", schedule_path
-    ], capture_output=True, text=True, cwd="D:/SCHEDCHECK")
+        str(REPO_ROOT / "examples" / "demo_bugs.py"), "make_withdraw_scenario", schedule_path
+    ], capture_output=True, text=True, cwd=str(REPO_ROOT))
 
     assert result.returncode == 0
     assert "Replay successful!" in result.stdout

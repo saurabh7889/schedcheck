@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from typing import Any
+
+# Ensure package can be imported when running viewer.py directly as a script
+if __package__ is None or __package__ == "":
+    src_dir = str(Path(__file__).resolve().parent.parent)
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
 
 from schedcheck.schedule import Schedule
 from schedcheck.report import timeline
